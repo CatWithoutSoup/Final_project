@@ -1,78 +1,117 @@
-//SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT
 pragma solidity >=0.8.0 <0.9.0;
 
-// Useful for debugging. Remove when deploying to a live network.
-import "hardhat/console.sol";
-
-// Use openzeppelin to inherit battle-tested implementations (ERC20, ERC721, etc)
-// import "@openzeppelin/contracts/access/Ownable.sol";
-
-/**
- * A smart contract that allows changing a state variable of the contract and tracking the changes
- * It also allows the owner to withdraw the Ether in the contract
- * @author BuidlGuidl
- */
-contract YourContract {
-    // State Variables
-    address public immutable owner;
-    string public greeting = "Building Unstoppable Apps!!!";
-    bool public premium = false;
-    uint256 public totalCounter = 0;
-    mapping(address => uint) public userGreetingCounter;
-
-    // Events: a way to emit log statements from smart contract that can be listened to by external parties
-    event GreetingChange(address indexed greetingSetter, string newGreeting, bool premium, uint256 value);
-
-    // Constructor: Called once on contract deployment
-    // Check packages/hardhat/deploy/00_deploy_your_contract.ts
-    constructor(address _owner) {
-        owner = _owner;
+contract VotingContract {
+    struct Candidate {
+        string name;
+        uint256 voteCount;
     }
 
-    // Modifier: used to define a set of rules that must be met before or after a function is executed
-    // Check the withdraw() function
+    struct VotingSession {
+        string description;
+        uint256 startTime;
+        uint256 endTime;
+        mapping(address => bool) hasVoted;
+        Candidate[] candidates;
+        bool exists;
+    }
+
+    address public  owner;
+    uint256 public votingSessionCount = 0;
+    mapping(uint256 => VotingSession) public votingSessions;
+
     modifier isOwner() {
-        // msg.sender: predefined variable that represents address of the account that called the current function
         require(msg.sender == owner, "Not the Owner");
         _;
     }
 
-    /**
-     * Function that allows anyone to change the state variable "greeting" of the contract and increase the counters
-     *
-     * @param _newGreeting (string memory) - new greeting to save on the contract
-     */
-    function setGreeting(string memory _newGreeting) public payable {
-        // Print data to the hardhat chain console. Remove when deploying to a live network.
-        console.log("Setting new greeting '%s' from %s", _newGreeting, msg.sender);
+    modifier sessionExists(uint256 sessionId) {
+        require(votingSessions[sessionId].exists, "Voting session does not exist");
+        _;
+    }
 
-        // Change state variables
-        greeting = _newGreeting;
-        totalCounter += 1;
-        userGreetingCounter[msg.sender] += 1;
+    modifier withinVotingPeriod(uint256 sessionId) {
+        require(
+            block.timestamp >= votingSessions[sessionId].startTime &&
+            block.timestamp <= votingSessions[sessionId].endTime,
+            "Voting is not active"
+        );
+        _;
+    }
 
-        // msg.value: built-in global variable that represents the amount of ether sent with the transaction
-        if (msg.value > 0) {
-            premium = true;
-        } else {
-            premium = false;
+    modifier hasNotVoted(uint256 sessionId) {
+        require(!votingSessions[sessionId].hasVoted[msg.sender], "You have already voted");
+        _;
+    }
+
+    constructor() {
+        owner = msg.sender;
+    }
+
+    event VotingSessionCreated(uint256 indexed sessionId, string description, uint256 startTime, uint256 endTime);
+    event VoteCast(uint256 indexed sessionId, address indexed voter, uint256 candidateIndex);
+    function getOwner() public view returns (address) {
+        return owner;
+    }
+    function transferOwnership(address newOwner) public isOwner {
+    require(newOwner != address(0), "New owner is the zero address");
+    owner = newOwner;
+    }
+    function createVotingSession(
+        string memory _description,
+        string[] memory _candidateNames,
+        uint256 _startTime,
+        uint256 _endTime
+    ) public isOwner {
+        require(_startTime < _endTime, "Invalid time period");
+
+        VotingSession storage newSession = votingSessions[votingSessionCount];
+        newSession.description = _description;
+        newSession.startTime = _startTime;
+        newSession.endTime = _endTime;
+        newSession.exists = true;
+
+        for (uint256 i = 0; i < _candidateNames.length; i++) {
+            newSession.candidates.push(Candidate({name: _candidateNames[i], voteCount: 0}));
         }
 
-        // emit: keyword used to trigger an event
-        emit GreetingChange(msg.sender, _newGreeting, msg.value > 0, msg.value);
+        emit VotingSessionCreated(votingSessionCount, _description, _startTime, _endTime);
+        votingSessionCount++;
     }
 
-    /**
-     * Function that allows the owner to withdraw all the Ether in the contract
-     * The function can only be called by the owner of the contract as defined by the isOwner modifier
-     */
-    function withdraw() public isOwner {
-        (bool success, ) = owner.call{ value: address(this).balance }("");
-        require(success, "Failed to send Ether");
+    function vote(uint256 sessionId, uint256 candidateIndex)
+        public
+        sessionExists(sessionId)
+        withinVotingPeriod(sessionId)
+        hasNotVoted(sessionId)
+    {
+        VotingSession storage session = votingSessions[sessionId];
+
+        require(candidateIndex < session.candidates.length, "Invalid candidate index");
+
+        session.candidates[candidateIndex].voteCount++;
+        session.hasVoted[msg.sender] = true;
+
+        emit VoteCast(sessionId, msg.sender, candidateIndex);
     }
 
-    /**
-     * Function that allows the contract to receive ETH
-     */
-    receive() external payable {}
+    function getResults(uint256 sessionId)
+        public
+        view
+        sessionExists(sessionId)
+        returns (string[] memory, uint256[] memory)
+    {
+        VotingSession storage session = votingSessions[sessionId];
+        uint256 candidateCount = session.candidates.length;
+
+        string[] memory names = new string[](candidateCount);
+        uint256[] memory votes = new uint256[](candidateCount);
+
+        for (uint256 i = 0; i < candidateCount; i++) {
+            names[i] = session.candidates[i].name;
+            votes[i] = session.candidates[i].voteCount;
+        }
+
+        return (names, votes);
+    }
 }
